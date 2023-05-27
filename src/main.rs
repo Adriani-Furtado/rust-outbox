@@ -36,15 +36,14 @@ async fn main() {
 
     let publisher = Arc::new(RabbitPublisher::with_connection("localhost", 5672).await);
     let db = Arc::new(
-        MySqlDatabase::new("mysql://root@localhost:3306/payment_provider_starling".to_string()).await,
+        MySqlDatabase::new("mysql://root@localhost:3306/payment_provider_starling".to_string())
+            .await,
     );
 
     scheduler.every(5.seconds()).run(move || {
         let publisher = Arc::clone(&publisher);
         let db = Arc::clone(&db);
-        async move {
-            run_outbox(&publisher, &db).await
-        }
+        async move { run_outbox(&publisher, &db).await }
     });
 
     loop {
@@ -105,8 +104,6 @@ mod db {
     #[async_trait]
     impl Database for MySqlDatabase {
         async fn get_messages(&self) -> Vec<OutboxMessages> {
-            
-
             sqlx::query_as!(
                 OutboxMessages,
                 "SELECT * FROM outbox_messages WHERE completed_at is NULL"
@@ -117,8 +114,6 @@ mod db {
         }
 
         async fn complete_message(&self, id: &str, completed_at: NaiveDateTime) -> bool {
-            
-
             sqlx::query(
                 r#"
                 UPDATE outbox_messages
@@ -133,8 +128,6 @@ mod db {
             .is_ok()
         }
         async fn fail_message(&self, id: &str, error: &str, time: NaiveDateTime) -> bool {
-            
-
             sqlx::query(
                 r#"
                 UPDATE outbox_messages

@@ -1,19 +1,14 @@
 pub mod rabbit_publisher {
 
     use async_trait::async_trait;
-    use lapin::{
-        options::BasicPublishOptions, BasicProperties,
-        Channel, Error,
-    };
-    
+    use lapin::{options::BasicPublishOptions, BasicProperties, Channel, Error};
 
     use crate::models::OutboxMessages;
 
     // #[automock]
     #[async_trait]
     pub trait Publisher {
-        async fn publish_message(&self, message: &OutboxMessages)
-            -> Result<(), Error>;
+        async fn publish_message(&self, message: &OutboxMessages) -> Result<(), Error>;
     }
 
     pub struct RabbitPublisher {
@@ -39,10 +34,7 @@ pub mod rabbit_publisher {
 
     #[async_trait]
     impl Publisher for RabbitPublisher {
-        async fn publish_message(
-            &self,
-            message: &OutboxMessages,
-        ) -> Result<(), Error> {
+        async fn publish_message(&self, message: &OutboxMessages) -> Result<(), Error> {
             let channel = self.channel.clone();
             log::info!("Publishing message: {}", message);
             let result = channel.basic_publish(
