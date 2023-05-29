@@ -5,7 +5,6 @@ use std::{error::Error, fmt::Display, future::Future, rc::Rc, sync::Arc, time::D
 
 use clokwerk::Interval::*;
 use clokwerk::*;
-use db::Database;
 use dotenvy::dotenv;
 use lapin::{
     message::DeliveryResult,
@@ -16,13 +15,12 @@ use lapin::{
 };
 use log::{debug, error, info, log_enabled, Level};
 use outbox_publisher::{
+    db::{Database, MySqlDatabase},
     models::OutboxMessages,
     rabbit_publisher::rabbit_publisher::{Publisher, RabbitPublisher},
 };
 use sqlx::mysql::MySqlPoolOptions;
 use std::env;
-
-use crate::db::MySqlDatabase;
 
 #[tokio::main]
 async fn main() {
@@ -43,7 +41,7 @@ async fn main() {
     scheduler.every(5.seconds()).run(move || {
         let publisher = Arc::clone(&publisher);
         let db = Arc::clone(&db);
-        async move { run_outbox(&publisher, &db).await }
+        async move { run_outbox(&*publisher, &*db).await }
     });
 
     loop {
@@ -51,115 +49,92 @@ async fn main() {
     }
 }
 
-async fn run_outbox<P: Publisher, DB: Database>(publisher: &Arc<P>, db: &Arc<DB>) {
+async fn run_outbox<Pub: Publisher, DB: Database>(publisher: &Pub, db: &DB) {
     log::info!("Running outbox");
-    let messages = db.get_messages().await;
+    let messages = db.get_messages().await.unwrap_or_else(|e| {
+        log::error!("Failed to fetch messages from the DB {}", e.to_string());
+        vec![]
+    });
     for message in messages {
         log::info!("Publishing message: {}", message);
-        let result = publisher.publish_message(&message).await;
-        if result.is_ok() {
-            log::info!("Message published successfully: {}", message);
-            let time = chrono::Utc::now().naive_utc();
-            db.complete_message(&message.uuid, time).await;
-        } else {
-            log::error!("Message failed to publish: {}", message);
-            let time = chrono::Utc::now().naive_utc();
-            db.fail_message(&message.uuid, "e", time).await;
+        match publisher.publish_message(&message).await {
+            Ok(_) => {
+                log::info!("Message published successfully: {}", message);
+                let time = chrono::Utc::now().naive_utc();
+                db.complete_message(&message.uuid, time).await;
+            }
+            Err(e) => {
+                log::error!(
+                    "Message failed to publish: {} with {}",
+                    message,
+                    e.to_string()
+                );
+                let time = chrono::Utc::now().naive_utc();
+                db.fail_message(&message.uuid, "e", time).await;
+            }
         }
     }
 }
 
-mod db {
-    use std::env;
+#[cfg(test)]
+mod test {
+    use lapin::message;
+    use mockall::predicate;
+    use outbox_publisher::{db::MockDatabase, rabbit_publisher::rabbit_publisher::MockPublisher};
 
-    use async_trait::async_trait;
-    use chrono::NaiveDateTime;
-    use outbox_publisher::models::OutboxMessages;
-    use sqlx::mysql::MySqlPoolOptions;
+    use super::*;
 
-    #[async_trait]
-    pub trait Database {
-        async fn get_messages(&self) -> Vec<OutboxMessages>;
-        async fn complete_message(&self, id: &str, completed_at: NaiveDateTime) -> bool;
-        async fn fail_message(&self, id: &str, error: &str, time: NaiveDateTime) -> bool;
+    #[test]
+    fn performs_noop_when_fetching_messages_fail() {
+        let publisher = MockPublisher::new();
+        let mut db = MockDatabase::new();
+        db.expect_get_messages()
+            .return_once(|| Result::Err(sqlx::Error::RowNotFound));
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_outbox(&publisher, &db));
+        assert!(result == ())
     }
 
-    pub struct MySqlDatabase {
-        pool: sqlx::MySqlPool,
+    #[test]
+    fn publishes_messages_and_completes_them() {
+        let mut publisher = MockPublisher::new();
+        let mut db = MockDatabase::new();
+        let message = OutboxMessages::default();
+        let message2 = message.clone();
+        db.expect_get_messages()
+            .return_once(move || Result::Ok(vec![message]));
+
+        publisher
+            .expect_publish_message()
+            .with(predicate::eq(message2))
+            .return_once(|_| Ok(()));
+
+        db.expect_complete_message().return_const(true).once();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_outbox(&publisher, &db));
+        assert!(result == ())
     }
 
-    impl MySqlDatabase {
-        pub async fn new(url: String) -> Self {
-            let db_url = env::var("DATABASE_URL").unwrap_or(url);
-            let pool = MySqlPoolOptions::new()
-                .max_connections(5)
-                .connect(&db_url)
-                .await
-                .expect("Could not acquire Database connection");
+    #[test]
+    fn publishes_messages_and_fails_them() {
+        let mut publisher = MockPublisher::new();
+        let mut db = MockDatabase::new();
+        let message = OutboxMessages::default();
+        let message2 = message.clone();
+        db.expect_get_messages()
+            .return_once(move || Result::Ok(vec![message]));
 
-            MySqlDatabase { pool }
-        }
-    }
+        publisher
+            .expect_publish_message()
+            .with(predicate::eq(message2))
+            .return_once(|_| Result::Err(lapin::Error::ChannelsLimitReached));
 
-    #[async_trait]
-    impl Database for MySqlDatabase {
-        async fn get_messages(&self) -> Vec<OutboxMessages> {
-            sqlx::query_as!(
-                OutboxMessages,
-                "SELECT * FROM outbox_messages WHERE completed_at is NULL"
-            )
-            .fetch_all(&self.pool)
-            .await
-            .unwrap()
-        }
+        db.expect_fail_message().return_const(true).once();
 
-        async fn complete_message(&self, id: &str, completed_at: NaiveDateTime) -> bool {
-            sqlx::query(
-                r#"
-                UPDATE outbox_messages
-                SET completed_at = ?
-                WHERE uuid = ?
-                "#,
-            )
-            .bind(completed_at)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .is_ok()
-        }
-        async fn fail_message(&self, id: &str, error: &str, time: NaiveDateTime) -> bool {
-            sqlx::query(
-                r#"
-                UPDATE outbox_messages
-                SET last_error = ?, failed_at = ?
-                WHERE uuid = ?
-                "#,
-            )
-            .bind(error)
-            .bind(time)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .is_ok()
-        }
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(run_outbox(&publisher, &db));
+        assert!(result == ())
     }
 }
-
-// async fn establish_connection() {
-//     let db_url = "mysql://root@127.0.0.1:3306/payment_provider_starling";
-//     let pool = MySqlPoolOptions::new()
-//         .max_connections(5)
-//         .connect(db_url)
-//         .await
-//         .expect("Could not acquire Database connection");
-
-//     let result = sqlx::query_as!(
-//         OutboxMessages,
-//         "SELECT * FROM outbox_messages"
-//     )
-//     .fetch_one(&pool)
-//     .await
-//     .unwrap();
-
-//     info!("Retrieved result from table {}", result)
-// }

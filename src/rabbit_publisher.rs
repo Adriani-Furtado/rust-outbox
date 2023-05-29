@@ -2,10 +2,11 @@ pub mod rabbit_publisher {
 
     use async_trait::async_trait;
     use lapin::{options::BasicPublishOptions, BasicProperties, Channel, Error};
+    use mockall::automock;
 
     use crate::models::OutboxMessages;
 
-    // #[automock]
+    #[automock]
     #[async_trait]
     pub trait Publisher {
         async fn publish_message(&self, message: &OutboxMessages) -> Result<(), Error>;
@@ -26,7 +27,10 @@ pub mod rabbit_publisher {
             let connection = lapin::Connection::connect(&uri, options)
                 .await
                 .expect("could not connect to rabbitmq");
-            let channel = connection.create_channel().await.unwrap();
+            let channel = connection
+                .create_channel()
+                .await
+                .expect("could not create rabbitmq channel");
 
             RabbitPublisher { channel }
         }
@@ -35,7 +39,7 @@ pub mod rabbit_publisher {
     #[async_trait]
     impl Publisher for RabbitPublisher {
         async fn publish_message(&self, message: &OutboxMessages) -> Result<(), Error> {
-            let channel = self.channel.clone();
+            let channel = &self.channel;
             log::info!("Publishing message: {}", message);
             let result = channel.basic_publish(
                 &message.exchange,

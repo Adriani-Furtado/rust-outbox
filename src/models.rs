@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use chrono::NaiveDateTime;
 
-#[derive(sqlx::FromRow, Debug)]
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Default)]
 pub struct OutboxMessages {
     pub uuid: String,
     pub payload: String,
@@ -14,22 +14,6 @@ pub struct OutboxMessages {
     pub completed_at: Option<NaiveDateTime>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
-}
-impl OutboxMessages {
-    pub fn default() -> OutboxMessages {
-        OutboxMessages {
-            uuid: "".to_string(),
-            payload: "".to_string(),
-            last_error: None,
-            attempts: 0,
-            exchange: "".to_string(),
-            routing_key: "test_queue".to_string(),
-            metadata: None,
-            completed_at: None,
-            created_at: chrono::Utc::now().naive_utc(),
-            updated_at: chrono::Utc::now().naive_utc(),
-        }
-    }
 }
 
 impl Display for OutboxMessages {
