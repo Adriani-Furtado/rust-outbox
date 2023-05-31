@@ -6,7 +6,7 @@ use chrono::NaiveDateTime;
 use mockall::automock;
 use sqlx::{
     mysql::{MySqlConnectOptions, MySqlPoolOptions},
-    ConnectOptions, Connection, MySqlConnection,
+    ConnectOptions,
 };
 
 #[automock]
@@ -23,7 +23,7 @@ pub struct MySqlDatabase {
 
 impl MySqlDatabase {
     pub async fn new(url: String) -> Self {
-        let db_url = env::var("DATABASE_URL").unwrap_or(url);
+        let _db_url = env::var("DATABASE_URL").unwrap_or(url);
 
         let connection = MySqlConnectOptions::new()
             .host("localhost")
