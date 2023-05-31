@@ -40,15 +40,17 @@ pub mod rabbit_publisher {
     impl Publisher for RabbitPublisher {
         async fn publish_message(&self, message: &OutboxMessages) -> Result<(), Error> {
             let channel = &self.channel;
-            log::info!("Publishing message: {}", message);
-            let result = channel.basic_publish(
-                &message.exchange,
-                &message.routing_key,
-                BasicPublishOptions::default(),
-                message.payload.as_bytes(),
-                BasicProperties::default(),
-            );
-            result.await.map(|_| ())
+            log::info!("Publishing message: {}", message.uuid);
+            channel
+                .basic_publish(
+                    &message.exchange,
+                    &message.routing_key,
+                    BasicPublishOptions::default(),
+                    message.payload.as_bytes(),
+                    BasicProperties::default(),
+                )
+                .await
+                .map(|_| ())
         }
     }
 }

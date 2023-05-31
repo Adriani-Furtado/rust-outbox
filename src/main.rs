@@ -28,24 +28,19 @@ async fn main() {
         .filter_level(log::LevelFilter::Info)
         .init();
 
-    let mut scheduler = AsyncScheduler::new();
-
     info!(target: "main", "App started");
 
-    let publisher = Arc::new(RabbitPublisher::with_connection("localhost", 5672).await);
-    let db = Arc::new(
+    let publisher = RabbitPublisher::with_connection("localhost", 5672).await;
+    let db =
         MySqlDatabase::new("mysql://root@localhost:3306/payment_provider_starling".to_string())
-            .await,
-    );
-
-    scheduler.every(5.seconds()).run(move || {
-        let publisher = Arc::clone(&publisher);
-        let db = Arc::clone(&db);
-        async move { run_outbox(&*publisher, &*db).await }
-    });
+            .await;
 
     loop {
-        scheduler.run_pending().await;
+        let start_time = std::time::Instant::now();
+        run_outbox(&publisher, &db).await;
+        let elapsed = start_time.elapsed();
+        info!(target: "main", "Outbox run took: {:?}", elapsed);
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -56,10 +51,8 @@ async fn run_outbox<Pub: Publisher, DB: Database>(publisher: &Pub, db: &DB) {
         vec![]
     });
     for message in messages {
-        log::info!("Publishing message: {}", message);
         match publisher.publish_message(&message).await {
             Ok(_) => {
-                log::info!("Message published successfully: {}", message);
                 let time = chrono::Utc::now().naive_utc();
                 db.complete_message(&message.uuid, time).await;
             }
